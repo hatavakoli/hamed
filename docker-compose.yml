@@ -1,0 +1,99 @@
+# =============================================================================
+# Three services:
+#   db      — PostgreSQL with a named volume so your data survives restarts
+#   migrate — runs `prisma migrate deploy` once, then exits
+#   app     — the Next.js dashboard and API
+#   worker  — node-cron scheduler running the same image
+#
+# Start everything:   docker compose up -d --build
+# Watch the logs:     docker compose logs -f app worker
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ycim-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ycim}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ycim_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ycim}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Exposed on localhost only so you can connect with a GUI client.
+    # Delete this block entirely for the tightest production setup.
+    ports:
+      - '127.0.0.1:5432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ycim} -d ${POSTGRES_DB:-ycim}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # Applies database migrations, then exits. Both app and worker wait for it.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ycim-migrate
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
+    command: ['./node_modules/.bin/prisma', 'migrate', 'deploy']
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ycim-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://127.0.0.1:3000/api/health']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ycim-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
+      NODE_ENV: production
+    command: ['./node_modules/.bin/tsx', 'scripts/worker.ts']
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # The worker has no HTTP port; just confirm the process is alive.
+      test: ['CMD-SHELL', 'pgrep -f scripts/worker.ts > /dev/null || exit 1']
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_data:
+    name: ycim_postgres_data

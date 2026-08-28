@@ -1,0 +1,24 @@
+# Just the database, for when you run `npm run dev` on your own machine.
+#   docker compose -f docker-compose.dev.yml up -d
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ycim-db-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ycim}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ycim_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ycim}
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-ycim}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_dev_data:
+    name: ycim_postgres_dev_data

@@ -1,0 +1,245 @@
+// Prisma schema for YouTube Content Intelligence Monitor
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums  (kept as enums so bad values can never reach the database)
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
+/// Lifecycle of a video record inside our system.
+enum VideoStatus {
+  NEW /// detected, nothing done yet
+  PROCESSING /// pipeline is running
+  READY /// report generated
+  UNAVAILABLE /// private / deleted / region blocked on YouTube
+  FAILED /// pipeline gave up
+}
+
+enum TranscriptStatus {
+  PENDING /// not attempted yet
+  RETRYING /// attempted, failed, will retry automatically
+  AVAILABLE /// we have text
+  UNAVAILABLE /// no captions exist for this video
+  FAILED /// all retries exhausted -> manual retry only
+}
+
+enum AnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+enum JobType {
+  CHECK_ALL_CHANNELS
+  CHECK_CHANNEL
+  PROCESS_VIDEO
+  RETRY_TRANSCRIPT
+  WEEKLY_DIGEST
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+/// Single admin today; the table already exists so multi-user SaaS is a small step.
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  role         UserRole @default(ADMIN)
+  passwordHash String? /// scrypt hash; null = fall back to ADMIN_PASSWORD env var
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  channels Channel[]
+
+  @@map("users")
+}
+
+model Channel {
+  id                           String    @id @default(cuid())
+  youtubeChannelId             String    @unique
+  handle                       String?
+  title                        String
+  description                  String?   @db.Text
+  thumbnailUrl                 String?
+  uploadsPlaylistId            String?
+  isActive                     Boolean   @default(true)
+  lastCheckedAt                DateTime?
+  lastSuccessfulCheckAt        DateTime?
+  lastProcessedVideoPublishedAt DateTime?
+  lastError                    String?   @db.Text
+  ownerId                      String?
+  createdAt                    DateTime  @default(now())
+  updatedAt                    DateTime  @updatedAt
+
+  owner  User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  videos Video[]
+  jobs   MonitoringJob[]
+
+  @@index([isActive])
+  @@index([lastCheckedAt])
+  @@map("channels")
+}
+
+model Video {
+  id               String           @id @default(cuid())
+  youtubeVideoId   String           @unique
+  channelId        String
+  title            String
+  description      String?          @db.Text
+  url              String
+  publishedAt      DateTime
+  durationSeconds  Int?
+  thumbnailUrl     String?
+  viewCount        BigInt?
+  likeCount        BigInt?
+  commentCount     BigInt?
+  tags             Json?
+  categoryId       String?
+  privacyStatus    String?
+  status           VideoStatus      @default(NEW)
+  transcriptStatus TranscriptStatus @default(PENDING)
+  analysisStatus   AnalysisStatus   @default(PENDING)
+  metadataFetchedAt DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  channel    Channel         @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  transcript Transcript?
+  report     AnalysisReport?
+  jobs       MonitoringJob[]
+
+  @@index([channelId, publishedAt(sort: Desc)])
+  @@index([publishedAt(sort: Desc)])
+  @@index([analysisStatus])
+  @@index([transcriptStatus])
+  @@map("videos")
+}
+
+model Transcript {
+  id           String           @id @default(cuid())
+  videoId      String           @unique
+  language     String?
+  provider     String?
+  rawText      String?          @db.Text
+  segments     Json? /// [{ start: number, duration: number, text: string }]
+  status       TranscriptStatus @default(PENDING)
+  errorMessage String?          @db.Text
+  retrievedAt  DateTime?
+  retryCount   Int              @default(0)
+  nextRetryAt  DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRetryAt])
+  @@map("transcripts")
+}
+
+model AnalysisReport {
+  id               String         @id @default(cuid())
+  videoId          String         @unique
+  modelProvider    String
+  modelName        String
+  promptVersion    String
+  structuredData   Json /// validated against AnalysisSchema (src/lib/ai/schema.ts)
+  executiveSummary String?        @db.Text
+  verdict          String? /// strong | average | weak
+  overallScore     Float?
+  transcriptUsed   Boolean        @default(false)
+  confidence       String? /// high | low  (low = metadata-only analysis)
+  analysisStatus   AnalysisStatus @default(PENDING)
+  errorMessage     String?        @db.Text
+  tokensInput      Int?
+  tokensOutput     Int?
+  estimatedCost    Float?
+  generatedAt      DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([overallScore])
+  @@index([generatedAt(sort: Desc)])
+  @@map("analysis_reports")
+}
+
+model MonitoringJob {
+  id           String    @id @default(cuid())
+  jobType      JobType
+  channelId    String?
+  videoId      String?
+  status       JobStatus @default(PENDING)
+  /// Nullable-unique idempotency key, e.g. "PROCESS_VIDEO:<videoId>".
+  /// Set while the job is PENDING/RUNNING, cleared when it finishes, so
+  /// Postgres itself refuses to queue the same work twice.
+  dedupeKey    String?   @unique
+  startedAt    DateTime?
+  completedAt  DateTime?
+  attempts     Int       @default(0)
+  errorMessage String?   @db.Text
+  payload      Json?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  channel Channel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  video   Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([status, jobType])
+  @@index([createdAt(sort: Desc)])
+  @@map("monitoring_jobs")
+}
+
+model WeeklyDigest {
+  id             String    @id @default(cuid())
+  weekStart      DateTime
+  weekEnd        DateTime
+  structuredData Json
+  summary        String?   @db.Text
+  videoCount     Int       @default(0)
+  sentAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([weekStart, weekEnd])
+  @@index([weekStart(sort: Desc)])
+  @@map("weekly_digests")
+}
+
+/// Key/value app configuration.
+/// Non-secret values are stored in plain text; secrets are AES-256-GCM
+/// encrypted (see src/lib/crypto.ts) and are ALWAYS overridden by env vars.
+model AppSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String?  @db.Text
+  isEncrypted Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("app_settings")
+}

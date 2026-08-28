@@ -1,0 +1,16 @@
+node_modules
+.next
+out
+dist
+.env
+.env.local
+.env.*.local
+*.log
+npm-debug.log*
+.DS_Store
+coverage
+.vscode
+.idea
+tsconfig.tsbuildinfo
+# next-env.d.ts is committed on purpose: Next.js regenerates it, but keeping it
+# in the repo means a fresh clone type-checks before the first build.
