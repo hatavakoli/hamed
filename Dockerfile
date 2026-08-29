@@ -27,7 +27,10 @@ RUN npx prisma generate
 # DATABASE_URL is only used at runtime, but Next.js evaluates some modules while
 # building. A dummy value keeps the build hermetic — no database is contacted.
 ENV DATABASE_URL="postgresql://build:build@localhost:5432/build?schema=public"
+ENV DIRECT_URL="postgresql://build:build@localhost:5432/build?schema=public"
 ENV NEXT_TELEMETRY_DISABLED=1
+# Docker needs the standalone server bundle; see next.config.mjs.
+ENV NEXT_OUTPUT_STANDALONE=true
 RUN npm run build
 
 # ---------- 3. Runtime ----------

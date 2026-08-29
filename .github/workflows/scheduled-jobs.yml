@@ -1,0 +1,82 @@
+# Drives the app's scheduled work by calling its /api/cron/* endpoints.
+#
+# WHY THIS EXISTS
+# On a VPS the `worker` container handles all of this. On Vercel there is no
+# long-running process, and Vercel Cron on the Hobby plan can only fire once a
+# day — which is too slow for "check for new videos every hour". GitHub Actions
+# is free and gives a realistic cadence on any Vercel plan.
+#
+# SETUP (repository -> Settings -> Secrets and variables -> Actions)
+#   Secret   CRON_SECRET   the same value as the CRON_SECRET env var in Vercel
+#   Variable APP_BASE_URL  e.g. https://your-app.vercel.app   (no trailing slash)
+#
+# Until both are set, every run exits successfully without doing anything, so
+# your Actions tab does not fill up with failures.
+#
+# NOTE: GitHub's scheduled runs are best-effort and are often several minutes
+# late, especially on the hour. That is fine here — the app is idempotent, so a
+# missed or duplicated run cannot create a duplicate video, job or report.
+
+name: Scheduled jobs
+
+on:
+  schedule:
+    - cron: '*/10 * * * *' # drain the job queue
+    - cron: '0 * * * *' # look for new videos
+    - cron: '0 8 * * 1' # weekly digest (Mondays 08:00 UTC)
+    - cron: '15 3 * * *' # data-retention cleanup
+  workflow_dispatch:
+    inputs:
+      task:
+        description: Task to run now
+        required: true
+        default: run-jobs
+        type: choice
+        options: [run-jobs, check-channels, weekly-digest, retention]
+
+# Never let two runs overlap. The app is idempotent anyway, but this keeps the
+# logs readable and avoids wasting minutes.
+concurrency:
+  group: scheduled-jobs
+  cancel-in-progress: false
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Work out which task to run
+        id: task
+        run: |
+          case "${{ github.event.schedule }}" in
+            '*/10 * * * *') echo "name=run-jobs"       >> "$GITHUB_OUTPUT" ;;
+            '0 * * * *')    echo "name=check-channels" >> "$GITHUB_OUTPUT" ;;
+            '0 8 * * 1')    echo "name=weekly-digest"  >> "$GITHUB_OUTPUT" ;;
+            '15 3 * * *')   echo "name=retention"      >> "$GITHUB_OUTPUT" ;;
+            *)              echo "name=${{ inputs.task || 'run-jobs' }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Call the endpoint
+        env:
+          BASE_URL: ${{ vars.APP_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TASK: ${{ steps.task.outputs.name }}
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
+            echo "::notice::APP_BASE_URL variable or CRON_SECRET secret is not set — skipping."
+            exit 0
+          fi
+
+          echo "Running task: $TASK"
+          status=$(curl -sS -o /tmp/body.json -w '%{http_code}' \
+            --max-time 120 --retry 2 --retry-delay 10 --retry-connrefused \
+            -X POST "${BASE_URL%/}/api/cron/$TASK" \
+            -H "Authorization: Bearer $CRON_SECRET")
+
+          echo "HTTP $status"
+          cat /tmp/body.json; echo
+
+          # 401 means the secret does not match; anything 5xx is a real failure.
+          if [ "$status" -ge 400 ]; then
+            echo "::error::Task $TASK failed with HTTP $status"
+            exit 1
+          fi

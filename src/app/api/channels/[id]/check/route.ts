@@ -4,7 +4,7 @@ import { requireAdmin } from '@/lib/auth'
 import { checkChannel } from '@/lib/jobs/check-channels'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 60
 
 type Params = { params: Promise<{ id: string }> }
 

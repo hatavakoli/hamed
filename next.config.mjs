@@ -1,7 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Produces a small self-contained server bundle in .next/standalone for Docker.
-  output: 'standalone',
+  // Only Docker needs the self-contained server bundle in .next/standalone.
+  // The Dockerfile sets this; Vercel builds its own output format, so leaving
+  // it unset there avoids fighting the platform's builder.
+  output: process.env.NEXT_OUTPUT_STANDALONE === 'true' ? 'standalone' : undefined,
   reactStrictMode: true,
   images: {
     // YouTube thumbnails. We mostly use plain <img>, but this keeps next/image usable.

@@ -6,20 +6,33 @@ import { applyRetentionPolicy } from '@/lib/jobs/retention'
 import { tick } from '@/lib/jobs/runner'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+// Kept at or below Vercel's Hobby limit so the deployment is accepted there.
+export const maxDuration = 60
+const JOB_BUDGET_MS = 45_000
 
 type Params = { params: Promise<{ task: string }> }
 
 /**
- * POST /api/cron/[task]  — for an EXTERNAL scheduler (system crontab, Vercel
- * Cron, GitHub Actions...) instead of the worker container.
+ * GET|POST /api/cron/[task]  — for an EXTERNAL scheduler (system crontab,
+ * Vercel Cron, GitHub Actions...) instead of the worker container.
  *
- * Requires `Authorization: Bearer <CRON_SECRET>`. Never uses a session, so it
- * cannot be triggered by a logged-in browser via CSRF.
+ * Requires `Authorization: Bearer <CRON_SECRET>`. It never accepts a session
+ * cookie, so a logged-in browser cannot trigger it via CSRF — which is also why
+ * exposing GET is safe here: a cross-origin request cannot set that header.
+ *
+ * GET exists because Vercel Cron only ever sends GET requests.
  *
  * Tasks: check-channels | run-jobs | weekly-digest | retention
  */
-export async function POST(req: Request, { params }: Params) {
+export async function GET(req: Request, ctx: Params) {
+  return handle(req, ctx)
+}
+
+export async function POST(req: Request, ctx: Params) {
+  return handle(req, ctx)
+}
+
+async function handle(req: Request, { params }: Params) {
   try {
     const header = req.headers.get('authorization') ?? req.headers.get('x-cron-secret')
     if (!verifyCronSecret(header)) {
@@ -33,7 +46,7 @@ export async function POST(req: Request, { params }: Params) {
         return ok({ task, channelsChecked: result.channelsChecked, newVideos: result.totalNewVideos })
       }
       case 'run-jobs': {
-        return ok({ task, ...(await tick({ limit: 5 })) })
+        return ok({ task, ...(await tick({ limit: 5, budgetMs: JOB_BUDGET_MS })) })
       }
       case 'weekly-digest': {
         return ok({ task, ...(await generateWeeklyDigest()) })

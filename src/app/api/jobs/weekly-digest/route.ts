@@ -3,7 +3,7 @@ import { requireAdmin, verifyCronSecret } from '@/lib/auth'
 import { generateWeeklyDigest } from '@/lib/jobs/weekly-digest'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+export const maxDuration = 60
 
 /** POST /api/jobs/weekly-digest — build and send this week's digest now. */
 export async function POST(req: Request) {

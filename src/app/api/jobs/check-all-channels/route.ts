@@ -3,7 +3,7 @@ import { requireAdmin, verifyCronSecret } from '@/lib/auth'
 import { checkAllChannels } from '@/lib/jobs/check-channels'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+export const maxDuration = 60
 
 /**
  * POST /api/jobs/check-all-channels

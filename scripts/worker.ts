@@ -54,6 +54,7 @@ async function main() {
   // Drain the queue every minute.
   cron.schedule('* * * * *', () =>
     safely('tick', async () => {
+      // No time budget here: the worker is a long-lived process, not a serverless function.
       const result = await tick({ limit: 3 })
       if (result.ran || result.queued) log.info('Tick', result)
     }),

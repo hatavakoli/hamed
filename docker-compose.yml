@@ -40,6 +40,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
+      # Same value: there is no connection pooler in this setup.
+      DIRECT_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
     command: ['./node_modules/.bin/prisma', 'migrate', 'deploy']
     depends_on:
       db:
@@ -55,6 +57,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
+      # Same value: there is no connection pooler in this setup.
+      DIRECT_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
       NODE_ENV: production
     ports:
       - '3000:3000'
@@ -79,6 +83,8 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
+      # Same value: there is no connection pooler in this setup.
+      DIRECT_URL: postgresql://${POSTGRES_USER:-ycim}:${POSTGRES_PASSWORD:-ycim_password}@db:5432/${POSTGRES_DB:-ycim}?schema=public
       NODE_ENV: production
     command: ['./node_modules/.bin/tsx', 'scripts/worker.ts']
     depends_on:

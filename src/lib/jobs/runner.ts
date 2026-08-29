@@ -65,24 +65,52 @@ export async function runJob(job: MonitoringJob): Promise<void> {
   }
 }
 
-/** Drains the queue, up to `limit` jobs. Returns how many ran. */
-export async function runPendingJobs(limit = 5): Promise<number> {
+/**
+ * Drains the queue, up to `limit` jobs.
+ *
+ * `budgetMs` exists for serverless (Vercel), where the whole request is killed
+ * at a hard timeout. We stop *starting* new jobs once the budget is spent, so a
+ * job is never cut off halfway through. A job already in flight still runs to
+ * completion, which is why the budget should be comfortably under the platform
+ * limit. Anything left in the queue is picked up by the next invocation.
+ *
+ * Returns how many jobs ran and whether work was left behind.
+ */
+export async function runPendingJobs(
+  limit = 5,
+  budgetMs?: number,
+): Promise<{ ran: number; stoppedEarly: boolean }> {
+  const startedAt = Date.now()
   await reclaimStaleJobs()
+
   const jobs = await getRunnableJobs(limit)
-  for (const job of jobs) await runJob(job)
-  return jobs.length
+  let ran = 0
+  for (const job of jobs) {
+    if (budgetMs !== undefined && Date.now() - startedAt >= budgetMs) {
+      log.info('Time budget spent — leaving the rest of the queue for the next run', {
+        ran,
+        remaining: jobs.length - ran,
+      })
+      return { ran, stoppedEarly: true }
+    }
+    await runJob(job)
+    ran++
+  }
+  return { ran, stoppedEarly: false }
 }
 
 /** One worker tick: queue due work, then drain the queue. */
-export async function tick(options: { limit?: number } = {}): Promise<{ queued: number; ran: number }> {
+export async function tick(
+  options: { limit?: number; budgetMs?: number } = {},
+): Promise<{ queued: number; ran: number; stoppedEarly: boolean }> {
   let queued = 0
   try {
     queued += await processDueTranscriptRetries()
   } catch (err) {
     log.error('Transcript retry scan failed', { message: safeErrorMessage(err) })
   }
-  const ran = await runPendingJobs(options.limit ?? 5)
-  return { queued, ran }
+  const { ran, stoppedEarly } = await runPendingJobs(options.limit ?? 5, options.budgetMs)
+  return { queued, ran, stoppedEarly }
 }
 
 /** True when the monitoring interval has elapsed since the last successful sweep. */

@@ -5,7 +5,7 @@ import { retrieveTranscript } from '@/lib/jobs/transcript-job'
 import { enqueueJob } from '@/lib/jobs/helpers'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 60
 
 type Params = { params: Promise<{ id: string }> }
 

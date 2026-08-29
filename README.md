@@ -24,11 +24,12 @@ before spending a cent.
 7. [How the monitoring pipeline works](#7-how-the-monitoring-pipeline-works)
 8. [API reference](#8-api-reference)
 9. [Testing](#9-testing)
-10. [Deploying to a VPS](#10-deploying-to-a-vps-contabo-hetzner-digitalocean)
-11. [Reverse proxy and HTTPS](#11-reverse-proxy-and-https-optional)
-12. [Common problems](#12-common-problems)
-13. [MVP launch checklist](#13-mvp-launch-checklist)
-14. [Where to take it next](#14-where-to-take-it-next)
+10. [Deploying to Vercel](#10-deploying-to-vercel)
+11. [Deploying to a VPS](#11-deploying-to-a-vps-contabo-hetzner-digitalocean)
+12. [Reverse proxy and HTTPS](#12-reverse-proxy-and-https-optional)
+13. [Common problems](#13-common-problems)
+14. [MVP launch checklist](#14-mvp-launch-checklist)
+15. [Where to take it next](#15-where-to-take-it-next)
 
 ---
 
@@ -96,6 +97,10 @@ permits caption downloads for channels you own, the app says so plainly instead 
 | Provider interfaces everywhere | `AiProvider`, `TranscriptProvider`, `YouTubeClient`, `EmailProvider` — swapping Claude for OpenAI, or adding a transcript vendor, means writing one class |
 | Zod on every boundary | Request bodies, query strings, env vars and **AI output** are all validated |
 | `MOCK_MODE` | The whole product is explorable and testable with no keys and no cost |
+
+The worker is the only piece that differs between deployment targets: on a VPS it is a container, on
+Vercel the same job functions are called over HTTP by a scheduler (§10). The application code is
+identical either way.
 
 **Why no Redis / BullMQ yet?** The MVP handles a handful of channels and a few dozen jobs a day.
 A database-backed queue with a unique constraint is simpler, has fewer failure modes, and gives you a
@@ -252,6 +257,7 @@ Full documentation lives in `.env.example`. Summary:
 | Variable | What it is |
 |---|---|
 | `DATABASE_URL` | PostgreSQL connection string. The app will not start without it. |
+| `DIRECT_URL` | Used **only** by `prisma migrate`, never by the running app. On local dev, Docker and a VPS set it to the same value as `DATABASE_URL` (`docker-compose.yml` does this automatically). On a pooled serverless database it is the direct, unpooled string. |
 
 ### Important before going live
 
@@ -507,7 +513,185 @@ Without a reachable database the integration suite **skips itself** with a print
 
 ---
 
-## 10. Deploying to a VPS (Contabo, Hetzner, DigitalOcean)
+## 10. Deploying to Vercel
+
+Vercel is the fastest way to get this online, and everything here is reversible — moving to a VPS
+later is just §11, with no code changes.
+
+### What is different on Vercel
+
+Vercel runs serverless functions. There is no place for the `worker` container to live, so the
+scheduled work has to be triggered over HTTP instead. That is what the `/api/cron/*` routes are for,
+and they were built for exactly this.
+
+| | VPS (Docker) | Vercel |
+|---|---|---|
+| Scheduler | `worker` container, `node-cron` | HTTP calls to `/api/cron/*` |
+| Queue drain | every 60 seconds | as often as your scheduler fires |
+| Max job time | unlimited | **60 seconds per invocation** |
+| Database | Postgres container | a hosted Postgres (Neon, Supabase, Vercel Postgres) |
+
+The 60-second ceiling is the one real constraint. A single video analysis with a long transcript can
+approach it. The job runner handles this: it stops *starting* new jobs about 45 seconds in, so a job
+is never cut off halfway, and whatever is left is picked up on the next run. Nothing is lost — just
+slower.
+
+### Step 1 — Create a hosted Postgres
+
+Any provider works. [Neon](https://neon.tech) has a usable free tier and is the easiest fit.
+
+Create a database and copy **two** connection strings:
+
+- the **pooled** one (Neon shows it as "Pooled connection") → `DATABASE_URL`
+- the **direct** one (unpooled) → `DIRECT_URL`
+
+Migrations cannot run through a connection pooler, which is why both exist. Append Prisma's
+serverless parameters to the pooled one:
+
+```
+DATABASE_URL="postgresql://…-pooler.neon.tech/db?sslmode=require&pgbouncer=true&connection_limit=1"
+DIRECT_URL="postgresql://…neon.tech/db?sslmode=require"
+```
+
+> Put the database in the same region as your Vercel functions (`iad1` by default). A database on
+> another continent adds latency to every page load.
+
+### Step 2 — Push the repo to GitHub and import it
+
+In Vercel: **Add New → Project → Import** your repository. Leave every build setting at its default —
+the `build` script already runs `prisma generate` before `next build`, and `next.config.mjs` only
+emits a Docker-style standalone bundle when `NEXT_OUTPUT_STANDALONE=true`, which Vercel never sets.
+
+**Do not deploy yet.** Add the environment variables first.
+
+### Step 3 — Environment variables
+
+In **Settings → Environment Variables**, add these for *Production* (and *Preview* if you use it):
+
+| Variable | Value |
+|---|---|
+| `DATABASE_URL` | the pooled connection string |
+| `DIRECT_URL` | the direct connection string |
+| `NEXTAUTH_SECRET` | `openssl rand -base64 32` |
+| `CRON_SECRET` | `openssl rand -hex 24` |
+| `ADMIN_EMAIL` | your email |
+| `ADMIN_PASSWORD` | a long password |
+| `APP_BASE_URL` | `https://your-app.vercel.app` |
+| `NEXTAUTH_URL` | the same value |
+| `MOCK_MODE` | `true` for the first deploy, then `false` |
+| `YOUTUBE_API_KEY` · `ANTHROPIC_API_KEY` · `RESEND_API_KEY` · `EMAIL_FROM` | once you are ready for real data |
+
+Deploy `MOCK_MODE=true` first. It proves the database, auth, cron and UI all work before any API key
+can confuse the picture. Then set it to `false` and redeploy.
+
+> You will not know your `*.vercel.app` URL until the first deploy. Set `APP_BASE_URL` to a
+> placeholder, deploy, then correct it and redeploy. It only affects the links inside emails.
+
+### Step 4 — Run the migration
+
+Vercel's build does not touch your database. Run the migration once from your own machine:
+
+```bash
+DATABASE_URL="<your DIRECT_URL>" DIRECT_URL="<your DIRECT_URL>" npx prisma migrate deploy
+```
+
+Use the **direct** string for both — migrations must bypass the pooler. Repeat this whenever you add
+a migration.
+
+Optionally seed an admin user and demo channels:
+
+```bash
+DATABASE_URL="<your DIRECT_URL>" DIRECT_URL="<your DIRECT_URL>" \
+  ADMIN_EMAIL="you@example.com" ADMIN_PASSWORD="your-password" MOCK_MODE=true npm run db:seed
+```
+
+Or skip it and use the setup wizard the first time you open the site.
+
+### Step 5 — Verify
+
+```bash
+curl https://your-app.vercel.app/api/health
+# {"status":"ok","database":"up",...}
+```
+
+Then open the site, sign in, add a channel, and press **Check all channels now** followed by
+**Run queued jobs**. If both work, the deployment is sound — the scheduler is only automating those
+same two buttons.
+
+### Step 6 — Schedule the background work
+
+**This is the step people forget.** Without it, videos are detected only when you press the buttons
+yourself.
+
+Vercel automatically sends `Authorization: Bearer $CRON_SECRET` with its cron requests, so the
+included `vercel.json` needs no extra wiring:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/check-channels", "schedule": "0 7 * * *" },
+    { "path": "/api/cron/run-jobs",       "schedule": "30 7 * * *" }
+  ]
+}
+```
+
+Those are **daily** schedules because Vercel's Hobby plan allows at most 2 cron jobs and fires them
+at most once per day. A more frequent schedule, or a third entry, makes the deployment fail on Hobby.
+
+**On Vercel Pro**, replace the block with a realistic cadence and redeploy:
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/run-jobs",       "schedule": "*/5 * * * *" },
+    { "path": "/api/cron/check-channels", "schedule": "0 * * * *" },
+    { "path": "/api/cron/weekly-digest",  "schedule": "0 8 * * 1" },
+    { "path": "/api/cron/retention",      "schedule": "15 3 * * *" }
+  ]
+}
+```
+
+**On Hobby**, daily monitoring is usually too slow to be useful. Use the included GitHub Actions
+workflow instead — it is free and gives a proper cadence on any plan:
+
+1. Open `.github/workflows/scheduled-jobs.yml` — it is already committed and needs no edits.
+2. In your GitHub repo: **Settings → Secrets and variables → Actions**
+   - **Secrets** tab → new secret `CRON_SECRET` = the same value as in Vercel
+   - **Variables** tab → new variable `APP_BASE_URL` = `https://your-app.vercel.app`
+3. Open the **Actions** tab, pick **Scheduled jobs**, and press **Run workflow** to test it now.
+
+It drains the queue every 10 minutes, checks channels hourly, sends the digest on Mondays and runs
+retention nightly. Until both values are set it exits quietly, so it will not spam you with failures.
+
+You can also delete `vercel.json` entirely and let GitHub Actions do all of it.
+
+### Cost and limits to keep an eye on
+
+- **Function duration** — 60s on Hobby. Already respected everywhere via `maxDuration = 60`.
+- **Anthropic spend** — keep `MAX_VIDEOS_PER_CHECK` at 3–5 in Settings. The dashboard shows a running
+  estimate.
+- **Neon free tier** — sleeps after inactivity, so the first request after a quiet period is slow.
+  Harmless here.
+- **Job stuck as "Running"** — if a function is killed mid-job, the row is reclaimed automatically
+  after 30 minutes and retried. You will see it in the activity log.
+
+### Moving to your VPS later
+
+Nothing to undo:
+
+1. Follow §11.
+2. Copy your environment variables across, setting `DIRECT_URL` to the same value as `DATABASE_URL`
+   (there is no pooler in the Docker setup — `docker-compose.yml` already does this for you).
+3. Migrate your data if you want to keep it:
+   ```bash
+   pg_dump "<your DIRECT_URL>" > vercel-backup.sql
+   cat vercel-backup.sql | docker compose exec -T db psql -U ycim -d ycim
+   ```
+4. Delete `vercel.json` and the GitHub Actions workflow — the `worker` container replaces both.
+
+---
+
+## 11. Deploying to a VPS (Contabo, Hetzner, DigitalOcean)
 
 Assumes a fresh Ubuntu 22.04/24.04 server. Run these as a user with `sudo`.
 
@@ -636,7 +820,7 @@ in `docker-compose.yml` so port 3000 is not reachable from the internet directly
 
 ---
 
-## 11. Reverse proxy and HTTPS (optional)
+## 12. Reverse proxy and HTTPS (optional)
 
 Skip this if you are happy on `http://IP:3000`. For a real domain, **Caddy** is the least work — it
 gets and renews TLS certificates automatically.
@@ -676,7 +860,7 @@ Then remove the `ports:` block from the `app` service, point your domain's A rec
 
 ---
 
-## 12. Common problems
+## 13. Common problems
 
 **"Invalid environment configuration: DATABASE_URL is required"**
 The `.env` file is missing or `DATABASE_URL` is blank. In Docker, the host must be `db`, not
@@ -708,6 +892,26 @@ The model returned malformed JSON twice. Usually a truncated response — try a 
 Settings, then press **Regenerate analysis**. The error is recorded on the report and in the activity
 log.
 
+**"Environment variable not found: DIRECT_URL"**
+Only `prisma migrate` needs this one — the app itself runs fine without it. Add `DIRECT_URL` to your
+`.env` with the same value as `DATABASE_URL` (or the direct, unpooled string on a serverless
+database).
+
+**On Vercel, videos are only analysed once a day**
+That is the Hobby plan's cron limit: 2 jobs, daily. Either upgrade to Pro and use the more frequent
+`vercel.json` schedule, or set up the included GitHub Actions workflow — both are covered in §10,
+Step 6.
+
+**On Vercel, nothing happens automatically at all**
+Step 6 of §10 was skipped, or `CRON_SECRET` differs between Vercel and your scheduler. Check it by
+hand:
+```bash
+curl -i -X POST https://your-app.vercel.app/api/cron/run-jobs \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+`401` means the secret does not match. `200` means the endpoint is fine and the scheduler is the
+problem.
+
 **Port 3000 already in use**
 Change the mapping in `docker-compose.yml` to `'3001:3000'`, or stop whatever holds the port.
 
@@ -716,7 +920,7 @@ Expected — that secret is the encryption key. Re-enter the keys in Settings, o
 
 ---
 
-## 13. MVP launch checklist
+## 14. MVP launch checklist
 
 **Security**
 
@@ -749,9 +953,18 @@ Expected — that secret is the encryption key. Re-enter the keys in Settings, o
 - [ ] Markdown and Print/PDF exports open correctly
 - [ ] Weekly digest generated manually once to confirm it works
 
+**If you deployed to Vercel**
+
+- [ ] `DIRECT_URL` set to the **direct** (unpooled) connection string
+- [ ] `DATABASE_URL` is the **pooled** string with `?pgbouncer=true&connection_limit=1`
+- [ ] `npx prisma migrate deploy` run once against the direct URL
+- [ ] `APP_BASE_URL` corrected to the real `*.vercel.app` (or custom) domain after the first deploy
+- [ ] A scheduler is actually firing — `vercel.json` crons on Pro, or the GitHub Actions workflow
+- [ ] Triggered the workflow manually once and confirmed it returned `200`
+
 **Operations**
 
-- [ ] `docker compose ps` shows `app` and `db` as `(healthy)`
+- [ ] `docker compose ps` shows `app` and `db` as `(healthy)` *(VPS only)*
 - [ ] A database backup taken and a restore tested at least once
 - [ ] Data-retention preference chosen in Settings
 - [ ] Both containers set to `restart: unless-stopped` (they are by default)
@@ -759,7 +972,7 @@ Expected — that secret is the encryption key. Re-enter the keys in Settings, o
 
 ---
 
-## 14. Where to take it next
+## 15. Where to take it next
 
 The MVP is single-admin, but the seams for a multi-user SaaS are already cut:
 

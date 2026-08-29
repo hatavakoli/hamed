@@ -4,7 +4,11 @@ import { requireAdmin, verifyCronSecret } from '@/lib/auth'
 import { tick } from '@/lib/jobs/runner'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+// Vercel's Hobby plan caps functions at 60s; a higher value fails the deploy.
+// Raise this (and JOB_BUDGET_MS below) if you are on a plan that allows more.
+export const maxDuration = 60
+/** Stop starting new jobs with ~15s of headroom so nothing is cut off mid-run. */
+const JOB_BUDGET_MS = 45_000
 
 const BodySchema = z.object({ limit: z.number().int().min(1).max(10).default(3) })
 
@@ -21,11 +25,14 @@ export async function POST(req: Request) {
     if (!verifyCronSecret(header)) await requireAdmin()
 
     const body = await parseBody(req, BodySchema).catch(() => ({ limit: 3 }))
-    const result = await tick({ limit: body.limit })
+    const result = await tick({ limit: body.limit, budgetMs: JOB_BUDGET_MS })
 
     return ok({
       ...result,
-      message: result.ran ? `Processed ${result.ran} queued job${result.ran === 1 ? '' : 's'}.` : 'Nothing was waiting in the queue.',
+      message: result.ran
+        ? `Processed ${result.ran} queued job${result.ran === 1 ? '' : 's'}.` +
+          (result.stoppedEarly ? ' More are still queued — run this again.' : '')
+        : 'Nothing was waiting in the queue.',
     })
   } catch (err) {
     return handleError(err)
