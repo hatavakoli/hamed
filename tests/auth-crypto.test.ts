@@ -93,3 +93,49 @@ describe('safe error messages', () => {
     expect(safeErrorMessage(new Error('bad sk-ant0123456789abcdef'))).toContain('***')
   })
 })
+
+describe('environment parsing', () => {
+  /**
+   * Regression test: `.env.example` documents optional variables as FOO="".
+   * Zod's .optional() rejects '' and .default() keeps it, so a blank line used
+   * to make every request fail with "Invalid environment configuration".
+   */
+  it('treats a blank variable exactly like a missing one', async () => {
+    const { getEnv, resetEnvCache } = await import('@/lib/env')
+    const saved = { ...process.env }
+    try {
+      resetEnvCache()
+      process.env.DATABASE_URL = 'postgresql://u:p@localhost:5432/db'
+      process.env.AI_PROVIDER = '' // optional enum
+      process.env.TRANSCRIPT_PROVIDER = '' // optional enum
+      process.env.LOG_LEVEL = '' // enum with a default
+      process.env.ANTHROPIC_MODEL = '' // string with a default
+      process.env.YOUTUBE_API_KEY = '' // optional string
+      process.env.MONITOR_INTERVAL_MINUTES = '' // coerced number
+
+      const env = getEnv()
+      expect(env.AI_PROVIDER).toBeUndefined()
+      expect(env.TRANSCRIPT_PROVIDER).toBeUndefined()
+      expect(env.YOUTUBE_API_KEY).toBeUndefined()
+      expect(env.LOG_LEVEL).toBe('info')
+      expect(env.ANTHROPIC_MODEL).toBe('claude-sonnet-4-5')
+      expect(env.MONITOR_INTERVAL_MINUTES).toBe(60)
+    } finally {
+      process.env = saved
+      resetEnvCache()
+    }
+  })
+
+  it('still rejects a genuinely missing DATABASE_URL', async () => {
+    const { getEnv, resetEnvCache } = await import('@/lib/env')
+    const saved = { ...process.env }
+    try {
+      resetEnvCache()
+      delete process.env.DATABASE_URL
+      expect(() => getEnv()).toThrow(/DATABASE_URL/)
+    } finally {
+      process.env = saved
+      resetEnvCache()
+    }
+  })
+})

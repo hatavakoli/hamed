@@ -61,9 +61,26 @@ export type Env = z.infer<typeof EnvSchema>
 
 let cached: Env | null = null
 
+/**
+ * Drops variables that are present but empty.
+ *
+ * `.env.example` documents several optional variables as `FOO=""` ("leave blank
+ * and a mock is used"). Zod treats '' as a real value, so `.optional()` would
+ * reject it and `.default()` would keep the empty string. Stripping blanks here
+ * makes a blank line behave exactly like a missing line, which is what anyone
+ * reading the .env file expects.
+ */
+function withoutBlanks(source: NodeJS.ProcessEnv): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === 'string' && value.trim() !== '') out[key] = value
+  }
+  return out
+}
+
 export function getEnv(): Env {
   if (cached) return cached
-  const parsed = EnvSchema.safeParse(process.env)
+  const parsed = EnvSchema.safeParse(withoutBlanks(process.env))
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join('.')}: ${i.message}`).join('\n')
     throw new Error(`Invalid environment configuration:\n${issues}`)
