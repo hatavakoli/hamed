@@ -131,7 +131,7 @@ export function SetupWizard({
             htmlFor="adminPassword"
             hint={
               hasEnvAdmin
-                ? 'Optional — ADMIN_EMAIL and ADMIN_PASSWORD are already set in your .env, so you can leave this blank.'
+                ? 'Optional. Leave it blank and you sign in with the ADMIN_PASSWORD from your .env file. Set one here to use your own password instead — it is stored as a scrypt hash, never in plain text.'
                 : 'At least 8 characters. Stored as a scrypt hash, never in plain text.'
             }
           >
@@ -140,7 +140,7 @@ export function SetupWizard({
               type="password"
               value={form.adminPassword}
               onChange={(e) => set('adminPassword', e.target.value)}
-              placeholder={hasEnvAdmin ? 'Leave blank to use the .env password' : 'At least 8 characters'}
+              placeholder={hasEnvAdmin ? 'Leave blank to use the password from .env' : 'At least 8 characters'}
               minLength={form.adminPassword ? 8 : undefined}
               required={!hasEnvAdmin && !alreadyCompleted}
             />

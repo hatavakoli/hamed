@@ -82,17 +82,25 @@ export async function attemptLogin(email: string, password: string): Promise<Log
   }
 
   const prefs = await getPreferences().catch(() => null)
-  const adminEmail = (env.ADMIN_EMAIL || prefs?.adminEmail || '').trim().toLowerCase()
   const adminPassword = env.ADMIN_PASSWORD
 
-  if (!adminEmail || !adminPassword) {
+  // Both addresses count as "the admin": the one in .env AND the one saved in
+  // Settings/Setup. Otherwise changing your email in the setup wizard without
+  // also choosing a password would lock you out on the next sign-in, because
+  // ADMIN_EMAIL from .env would silently keep winning.
+  // Same privilege either way — only a signed-in admin can change the saved one.
+  const adminEmails = new Set(
+    [env.ADMIN_EMAIL, prefs?.adminEmail].map((value) => (value ?? '').trim().toLowerCase()).filter(Boolean),
+  )
+
+  if (!adminEmails.size || !adminPassword) {
     return {
       ok: false,
       error: 'No admin account configured. Set ADMIN_EMAIL and ADMIN_PASSWORD in your .env file, then restart.',
     }
   }
-  if (normalized === adminEmail && safeEqual(password, adminPassword)) {
-    return { ok: true, token: createSessionToken(adminEmail, 'ADMIN') }
+  if (adminEmails.has(normalized) && safeEqual(password, adminPassword)) {
+    return { ok: true, token: createSessionToken(normalized, 'ADMIN') }
   }
   return { ok: false, error: 'Invalid email or password.' }
 }

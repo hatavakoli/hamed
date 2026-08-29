@@ -139,3 +139,43 @@ describe('environment parsing', () => {
     }
   })
 })
+
+describe('admin login identities', () => {
+  /**
+   * Regression test for a lockout: the setup wizard lets you change the admin
+   * email while leaving the password blank (it says the .env password will be
+   * used). ADMIN_EMAIL from .env used to win outright, so the address you had
+   * just chosen was rejected on the next sign-in.
+   */
+  it('accepts both the .env address and the address saved in Settings', async () => {
+    const { resetEnvCache } = await import('@/lib/env')
+    const saved = { ...process.env }
+    try {
+      resetEnvCache()
+      process.env.DATABASE_URL = 'postgresql://u:p@localhost:5432/db'
+      process.env.ADMIN_EMAIL = 'you@example.com'
+      process.env.ADMIN_PASSWORD = 'a-long-enough-password'
+
+      // Stand in for the database: no user row, and a different saved address.
+      vi.resetModules()
+      vi.doMock('@/lib/prisma', () => ({ prisma: { user: { findUnique: async () => null } } }))
+      vi.doMock('@/lib/settings', () => ({ getPreferences: async () => ({ adminEmail: 'real@person.com' }) }))
+
+      const { attemptLogin } = await import('@/lib/auth')
+
+      expect((await attemptLogin('you@example.com', 'a-long-enough-password')).ok).toBe(true)
+      expect((await attemptLogin('real@person.com', 'a-long-enough-password')).ok).toBe(true)
+      // Case and whitespace should not matter.
+      expect((await attemptLogin('  Real@Person.com ', 'a-long-enough-password')).ok).toBe(true)
+      // Everything else still fails.
+      expect((await attemptLogin('real@person.com', 'wrong')).ok).toBe(false)
+      expect((await attemptLogin('stranger@evil.com', 'a-long-enough-password')).ok).toBe(false)
+    } finally {
+      vi.doUnmock('@/lib/prisma')
+      vi.doUnmock('@/lib/settings')
+      vi.resetModules()
+      process.env = saved
+      resetEnvCache()
+    }
+  })
+})
