@@ -392,7 +392,7 @@ session cookie.
 
 | Method | Route | Description |
 |---|---|---|
-| `GET` | `/api/health` | Liveness + database check. `200` healthy, `503` degraded. Used by Docker. |
+| `GET` | `/api/health` | Liveness, database reachability **and** whether migrations have been applied. `200` healthy; `503` with `"status":"setup_required"` when the tables are missing, or `"degraded"` when the database is unreachable. Used by Docker. |
 | `POST` | `/api/auth/login` | `{ email, password }` → sets the session cookie |
 | `POST` | `/api/auth/logout` | Clears the session cookie |
 | `GET` | `/api/setup` | Whether first-run setup is still needed |
@@ -611,7 +611,7 @@ Or skip it and use the setup wizard the first time you open the site.
 
 ```bash
 curl https://your-app.vercel.app/api/health
-# {"status":"ok","database":"up",...}
+# {"status":"ok","database":"up","migrations":"applied",...}
 ```
 
 Then open the site, sign in, add a channel, and press **Check all channels now** followed by
@@ -778,7 +778,7 @@ docker compose run --rm migrate
 
 ```bash
 curl http://localhost:3000/api/health
-# {"status":"ok","database":"up",...}
+# {"status":"ok","database":"up","migrations":"applied",...}
 
 docker compose ps       # app and db should show (healthy)
 ```
@@ -891,6 +891,16 @@ The daily 10,000-unit quota is spent. It resets at midnight Pacific Time. Lower
 The model returned malformed JSON twice. Usually a truncated response — try a different model in
 Settings, then press **Regenerate analysis**. The error is recorded on the report and in the activity
 log.
+
+**Setup wizard says "Setup could not be saved", or any page 500s on a fresh install**
+Almost always the migrations have not been applied to the database the app is actually using. Ask the
+app:
+```bash
+curl http://localhost:3000/api/health
+```
+`"migrations":"missing"` means you need `npm run prisma:deploy`. `"database":"down"` means Postgres
+is not running or `DATABASE_URL` is wrong. Check you are pointing at the database you think you are —
+running the migration against one database while the app reads another produces exactly this.
 
 **"Environment variable not found: DIRECT_URL"**
 Only `prisma migrate` needs this one — the app itself runs fine without it. Add `DIRECT_URL` to your

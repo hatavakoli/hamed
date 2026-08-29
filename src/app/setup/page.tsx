@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { getSession } from '@/lib/auth'
 import { getPreferences, getSecretStatuses, isSetupCompleted } from '@/lib/settings'
 import { env } from '@/lib/env'
+import { checkDatabase } from '@/lib/db-status'
 import { SetupWizard } from './setup-wizard'
 
 export const dynamic = 'force-dynamic'
@@ -15,6 +16,10 @@ export default async function SetupPage() {
 
   const prefs = await getPreferences().catch(() => null)
   const secrets = await getSecretStatuses().catch(() => [])
+  // Reads elsewhere swallow database errors so this page can still render.
+  // That means an unmigrated database looks fine until the first write, so
+  // check explicitly and say so up front.
+  const database = await checkDatabase()
 
   return (
     <div className="min-h-screen bg-muted/40 p-4 py-10">
@@ -28,6 +33,7 @@ export default async function SetupPage() {
         secrets={secrets}
         mockMode={env.MOCK_MODE}
         hasEnvAdmin={Boolean(env.ADMIN_EMAIL && env.ADMIN_PASSWORD)}
+        databaseProblem={database.schemaReady ? null : `${database.error ?? 'Database not ready.'} ${database.hint ?? ''}`.trim()}
       />
     </div>
   )

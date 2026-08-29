@@ -20,12 +20,15 @@ export function SetupWizard({
   secrets,
   mockMode,
   hasEnvAdmin,
+  databaseProblem,
 }: {
   alreadyCompleted: boolean
   defaults: Defaults
   secrets: SecretStatus[]
   mockMode: boolean
   hasEnvAdmin: boolean
+  /** Set when the database is unreachable or has no tables — saving cannot work. */
+  databaseProblem: string | null
 }) {
   const router = useRouter()
   const [form, setForm] = useState({
@@ -87,6 +90,20 @@ export function SetupWizard({
           </p>
         </div>
       </div>
+
+      {databaseProblem && (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>Your database is not ready yet</AlertTitle>
+          <AlertDescription>
+            <p className="mb-2">{databaseProblem}</p>
+            <p>
+              Run it in the project folder, then reload this page:
+              <code className="ml-1 rounded bg-black/10 px-1.5 py-0.5 dark:bg-white/10">npm run prisma:deploy</code>
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {error && (
         <Alert variant="destructive">
@@ -220,7 +237,7 @@ export function SetupWizard({
       </Card>
 
       <div className="flex items-center justify-end gap-2">
-        <Button type="submit" size="lg" loading={loading}>
+        <Button type="submit" size="lg" loading={loading} disabled={Boolean(databaseProblem)}>
           {alreadyCompleted ? 'Save changes' : 'Finish setup'}
         </Button>
       </div>

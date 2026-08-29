@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
 import { env } from '@/lib/env'
+import { checkDatabase } from '@/lib/db-status'
 
 export const dynamic = 'force-dynamic'
 
@@ -10,26 +10,25 @@ export const dynamic = 'force-dynamic'
  */
 export async function GET() {
   const startedAt = Date.now()
-  let database: 'up' | 'down' = 'down'
-  let databaseError: string | null = null
+  const db = await checkDatabase()
 
-  try {
-    await prisma.$queryRaw`SELECT 1`
-    database = 'up'
-  } catch (err) {
-    databaseError = err instanceof Error ? err.message.slice(0, 200) : 'unknown error'
-  }
+  // A reachable database with no tables is NOT healthy — the app cannot write
+  // anything. Reporting that separately turns a confusing 500 later into an
+  // obvious answer now.
+  const status = !db.reachable ? 'degraded' : !db.schemaReady ? 'setup_required' : 'ok'
 
   const body = {
-    status: database === 'up' ? 'ok' : 'degraded',
+    status,
     version: '1.0.0',
     uptimeSeconds: Math.round(process.uptime()),
     responseTimeMs: Date.now() - startedAt,
-    database,
-    databaseError,
+    database: db.reachable ? 'up' : 'down',
+    migrations: db.schemaReady ? 'applied' : 'missing',
+    databaseError: db.error,
+    hint: db.hint,
     mockMode: env.MOCK_MODE,
     timestamp: new Date().toISOString(),
   }
 
-  return NextResponse.json(body, { status: database === 'up' ? 200 : 503 })
+  return NextResponse.json(body, { status: status === 'ok' ? 200 : 503 })
 }

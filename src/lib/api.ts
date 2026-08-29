@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import { ZodError, type ZodTypeAny, type z } from 'zod'
 import { UnauthorizedError, requireAdmin, verifyCronSecret, type Session } from './auth'
 import { YouTubeError } from './youtube/types'
@@ -41,6 +42,12 @@ export function handleError(err: unknown) {
   if (err instanceof AiError) {
     return fail(err.retryable ? 503 : 400, safeErrorMessage(err))
   }
+  const database = describeDatabaseError(err)
+  if (database) {
+    log.error('Database error', { message: database })
+    return fail(503, database)
+  }
+
   const message = safeErrorMessage(err)
   log.error('Unhandled API error', { message })
   return fail(500, 'Something went wrong on the server. Check the server logs for details.')
@@ -91,4 +98,40 @@ export async function parseBody<S extends ZodTypeAny>(req: Request, schema: S): 
 export function parseQuery<S extends ZodTypeAny>(url: string, schema: S): z.infer<S> {
   const params = Object.fromEntries(new URL(url).searchParams.entries())
   return schema.parse(params)
+}
+
+/**
+ * Turns Prisma's error codes into something a person can act on.
+ *
+ * Without this, "you forgot to run the migrations" reaches the browser as
+ * "Something went wrong on the server" — which is true, unhelpful, and sends
+ * people digging through logs for a one-command fix.
+ */
+export function describeDatabaseError(err: unknown): string | null {
+  if (err instanceof Prisma.PrismaClientInitializationError) {
+    if (err.errorCode === 'P1000') {
+      return 'The database rejected our credentials. Check the username and password in DATABASE_URL.'
+    }
+    if (err.errorCode === 'P1003') {
+      return 'That database does not exist yet. Create it, then run: npm run prisma:deploy'
+    }
+    return 'Cannot reach the database. Check that PostgreSQL is running and that DATABASE_URL in your .env is correct.'
+  }
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    switch (err.code) {
+      case 'P2021':
+      case 'P2022':
+        return 'The database is reachable but its tables are missing. Run the migrations:  npm run prisma:deploy'
+      case 'P1001':
+        return 'Cannot reach the database. Check that PostgreSQL is running and that DATABASE_URL in your .env is correct.'
+      case 'P2002':
+        return 'That record already exists.'
+      case 'P2025':
+        return 'That record no longer exists.'
+      default:
+        return null
+    }
+  }
+  return null
 }
