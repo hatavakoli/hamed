@@ -213,6 +213,22 @@ Then, on the dashboard:
 
 The "email" for each report is printed in the terminal running `npm run dev`.
 
+### macOS with OrbStack (or Docker Desktop)
+
+Nothing to change — OrbStack provides drop-in `docker` and `docker compose` commands, so every
+command in this README works unmodified. Three notes:
+
+- **Apple Silicon is fine.** `node:22-alpine` and `postgres:16-alpine` both publish arm64 images and
+  no `platform:` is pinned anywhere, so containers build and run natively. Prisma generates its
+  engine *inside* the Alpine build stage, so it always gets the right binary for the image
+  architecture — the usual "Prisma works on my Mac but not in Docker" problem cannot happen here.
+- **Port 5432 may already be taken** if you run Postgres.app or `brew services start postgresql`.
+  Either stop it (`brew services stop postgresql@16`) or change the mapping in
+  `docker-compose.dev.yml` to `'5433:5432'` and update the port in your `DATABASE_URL` to match.
+- **OrbStack gives every container a hostname.** Once `docker compose up -d` is running you can open
+  <https://ycim-app.orb.local> instead of `http://localhost:3000`. If you do, set
+  `APP_BASE_URL=https://ycim-app.orb.local` so the links inside emails point somewhere that works.
+
 ### Running the background worker locally
 
 `npm run dev` alone does not run scheduled jobs — that is what the **Run queued jobs** button is for.
@@ -552,6 +568,14 @@ docker compose up -d --build
 
 This builds the image and starts four services: `db`, `migrate` (runs migrations then exits), `app`
 and `worker`.
+
+> **Build on the server, not on your Mac.** An image built on Apple Silicon is arm64 and will not
+> start on a typical x86 VPS. The command above builds on the server, so this is handled — but if you
+> ever build locally and push to a registry, cross-compile explicitly:
+>
+> ```bash
+> docker buildx build --platform linux/amd64 -t yourname/ycim:latest --push .
+> ```
 
 ### Step 5 — Confirm the migrations ran
 
