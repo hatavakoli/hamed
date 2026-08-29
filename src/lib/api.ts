@@ -109,6 +109,11 @@ export function parseQuery<S extends ZodTypeAny>(url: string, schema: S): z.infe
  */
 export function describeDatabaseError(err: unknown): string | null {
   if (err instanceof Prisma.PrismaClientInitializationError) {
+    // Prisma leaves errorCode undefined for several of these, so fall back to
+    // matching the message text rather than reporting them all as "unreachable".
+    const byMessage = describeConnectionMessage(err.message)
+    if (byMessage) return byMessage
+
     if (err.errorCode === 'P1000') {
       return 'The database rejected our credentials. Check the username and password in DATABASE_URL.'
     }
@@ -132,6 +137,34 @@ export function describeDatabaseError(err: unknown): string | null {
       default:
         return null
     }
+  }
+  return null
+}
+
+/**
+ * Reads the driver's own words when Prisma does not give us a code.
+ * Each branch names the fix, because these three look identical from the UI
+ * ("the database is down") but need completely different actions.
+ */
+export function describeConnectionMessage(raw: string): string | null {
+  const message = raw.toLowerCase()
+
+  if (message.includes('denied access on the database') || message.includes('permission denied for database')) {
+    return (
+      'The database exists but this user is not allowed to connect to it. ' +
+      'That usually means DATABASE_URL points at a different PostgreSQL server than you think — ' +
+      'often a local install running on port 5432 instead of the Docker container. ' +
+      'Check which server is on that port, or grant the user access to the database.'
+    )
+  }
+  if (message.includes('password authentication failed') || message.includes('authentication failed')) {
+    return 'The database rejected the username or password in DATABASE_URL.'
+  }
+  if (message.includes('does not exist') && message.includes('database')) {
+    return 'That database does not exist on the server. Create it, then run: npm run prisma:deploy'
+  }
+  if (message.includes('econnrefused') || message.includes("can't reach database server")) {
+    return 'Nothing is listening on the database address. Start PostgreSQL (docker compose -f docker-compose.dev.yml up -d) or fix DATABASE_URL.'
   }
   return null
 }

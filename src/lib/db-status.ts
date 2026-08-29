@@ -1,5 +1,6 @@
 import { prisma } from './prisma'
 import { safeErrorMessage } from './logger'
+import { describeConnectionMessage } from './api'
 
 /**
  * Is the database usable?
@@ -26,13 +27,15 @@ export async function checkDatabase(): Promise<DatabaseStatus> {
   try {
     await prisma.$queryRaw`SELECT 1`
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
     return {
       reachable: false,
       schemaReady: false,
       error: safeErrorMessage(err),
       hint:
+        describeConnectionMessage(message) ??
         'The app cannot reach PostgreSQL. Check that your database is running ' +
-        '(docker compose -f docker-compose.dev.yml up -d) and that DATABASE_URL in .env is correct.',
+          '(docker compose -f docker-compose.dev.yml up -d) and that DATABASE_URL in .env is correct.',
     }
   }
 
